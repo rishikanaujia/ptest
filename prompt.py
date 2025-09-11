@@ -1,218 +1,85 @@
-WRITE_CONSTRAINTS_PROMPT = """
-Generate lookup constraints to filter data for answering questions using ONLY the provided reference data.
+DATABASE_SCHEMA_LINKING_INSTRUCTIONS = """# Database Schema Linking Instructions
 
-TABLE RELATIONSHIP UNDERSTANDING:
-- midatatable: Contains 74 records with (midataitemid, midataitemname)
-- mitransreference: Contains (midataitemid, mitransrefid, mitransrefname) where:
-  * 15 midataitemid values overlap with midatatable
-  * Additional midataitemid values exist ONLY in mitransreference (not in midatatable)
-- Use Retrieved Data structure to determine which table contains specific IDs
+## Task Overview
+You are tasked with identifying the relevant tables and columns from a SQL database schema to answer user questions. Generate schema links that will be used to construct accurate SQL queries.
 
-PROCESS STEPS:
+## Core Requirements
 
-1. Inventory: Extract all key concepts, terms, and entities from the question
+### Data Retrieval Rules
+- **Company Queries**: Always include the company name when questions involve specific companies
+- **Contextual Information**: Provide additional relevant context (currency, dates, document IDs, etc.) when applicable
+- **Schema Compliance**: Only use tables and columns explicitly defined in the provided database schema
+- **Key Relationships**: Ensure all joins are based on explicitly defined relationships in the schema
 
-2. Semantic Match: Find items in Retrieved Data that semantically match question concepts:
+### Schema Analysis
+- Check schema details and identify columns that act as foreign keys that can be used to join multiple tables
+- Analyze table relationships to ensure proper joins between related entities
 
-   PRIMARY MATCHING COLUMNS:
-   - midataitemname: Data fields, financial metrics, disclosure items
-   - mitransrefname: Funding rounds, security types, transaction categories
+### Output Format
+- Return schema links as a single, flat list following the provided examples
+- When combining elements from multiple reasoning steps, concatenate them logically
+- Include useful contextual columns (date, company_id, document_id) when relevant
 
-   MATCHING STRATEGIES:
-   - Exact: "liquidation price" → midataitemname: "liquidation price"
-   - Exact: "Series B" → mitransrefname: "Series B"
-   - Synonyms: "funding round" → mitransrefname: "Series A", "Pre-Series B" 
-   - Plurals: "advisors" → midataitemname: "Advisor Type"
-   - Abbreviations: "M&A" → mitransrefname: "Merger and Acquisition"
-   - Related: "expenses" → midataitemname: "Legal Expenses", "Underwriting Fees"
+### Query Constraints
+- Use company_id for searching companies (corresponding IDs will be provided)
+- Include any additional constraints specified in the database documentation
+- Apply constraints from the "Lookup Constraints" section when provided
+- Only reference tables and columns that exist in the schema
 
-3. Validate Table Presence: Check Retrieved Data to confirm which table contains each matched ID
+## Database Schema
+[Schema details to be provided below]
 
-4. Construct Constraint: Build constraint using correct table references based on Retrieved Data
+## Lookup Constraints
+[Additional constraints from prior queries to be listed here]
 
-5. Output: Return constraint condition only
+### Constraint Processing Rules
 
-CONSTRAINT FORMATS:
+**Format 1: Reference ID Constraints**
+- When constraint format is: `mitransreference.mitransrefid = {refid}`
+- Action: Include `mitransreference` table in schema link
 
-Data Item Filtering (from midatatable):
-midatatable.midataitemid = {id}
-midatatable.midataitemid IN ({id1}, {id2}, {id3})
+**Format 2: Data Item ID Constraints**
+- When constraint format is: `midatatable.midataitemid = {id}`
+- Action: Use the table_dict below to find the appropriate table based on the midataitemid value
+- Include the identified table in schema link
 
-Reference Category Filtering (from mitransreference):
-mitransreference.mitransrefid = {refid}
-mitransreference.mitransrefid IN ({refid1}, {refid2})
+### Table Dictionary for Data Item IDs
+```python
+table_dict = {
+    "mitransofnumdata": {
+        533: "Shares Offered, Excluding Overallotment",
+        535: "Offering Price",
+        130990: "liquidation price",
+        540: "Revenue Growth",
+        536: "Pre-money Valuation",
+        537: "Post-money Valuation"
+    },
+    "mitransoftextdata": {
+        53: "Offering Termination Date",
+        130913: "Reorganization",
+        130914: "Pay to Play",
+        130915: "Pay to Play Penalties"
+    },
+    "company_finmetrics": {
+        2001: "Net Income",
+        2002: "EBITDA",
+        2003: "Gross Margin",
+        2004: "Operating Cash Flow"
+    },
+    "company_captable": {
+        3001: "Preferred Shares Outstanding",
+        3002: "Common Shares Outstanding",
+        3003: "Options Granted",
+        3004: "Convertible Notes"
+    },
+    "company_terms": {
+        4001: "Board Rights",
+        4002: "Drag Along Rights",
+        4003: "Tag Along Rights",
+        4004: "Liquidation Preference"
+    }
+}
+```
 
-Combined Filtering (when both tables have relevant matches):
-midatatable.midataitemid = {id} , mitransreference.mitransrefid = {refid}
-midatatable.midataitemid IN ({id1}, {id2}) , mitransreference.mitransrefid = {refid}
-
-OUTPUT RULES:
-- Content Only: Return constraint without WHERE clause, semicolons, or extra text
-- Exact IDs: Use only IDs that appear in Retrieved Data
-- Table Accuracy: Use midatatable for data items, mitransreference for reference categories
-- No Match: Return empty response if no semantic matches found
-- Too Broad: Return empty response if question too general to constrain
-
-EXAMPLES:
-
-Example 1: Single Data Item Match
-Question: What is the liquidation price reported in each funding round?
-Retrieved Data:
-Table: midatatable
-midataitemname                midataitemid
-Advisor Type                  559
-liquidation price            1060
-Post-Money Valuation         177130
-
-Semantic Match: "liquidation price" matches midataitemname exactly
-Constraint: midatatable.midataitemid = 1060
-
-Example 2: Single Reference Category Match
-Question: What were the Series B funding details disclosed?
-Retrieved Data:
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111184          Pre-Series A         10
-111188          Series A             11
-111193          Series B             12
-
-Semantic Match: "Series B" matches mitransrefname exactly
-Constraint: mitransreference.mitransrefid = 12
-
-Example 3: Combined Constraint
-Question: What underwriting fees were reported in Series A rounds?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Underwriting Fees        2050
-Legal Expenses           2055
-
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111188          Series A             11
-111193          Series B             12
-
-Semantic Match: "underwriting fees" matches midataitemname "Underwriting Fees", "Series A" matches mitransrefname "Series A"
-Constraint: midatatable.midataitemid = 2050 , mitransreference.mitransrefid = 11
-
-Example 4: Multiple Values IN Clause
-Question: What advisor and trustee information is available for early-stage companies?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Advisor Type             559
-Advisor Institution      561
-Trustee Name            562
-Board Member Info       563
-
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111200          Seed Round           8
-111201          Pre-Series A         10
-
-Semantic Match: "advisor" matches "Advisor Type" and "Advisor Institution", "trustee" matches "Trustee Name", "early-stage" matches "Seed Round" and "Pre-Series A"
-Constraint: midatatable.midataitemid IN (559, 561, 562) , mitransreference.mitransrefid IN (8, 10)
-
-Example 5: Synonym Matching
-Question: What valuation data is reported for IPO transactions?
-Retrieved Data:
-Table: midatatable
-midataitemname               midataitemid
-Pre-Money Valuation          1070
-Post-Money Valuation         1071
-Enterprise Value             1072
-
-Table: mitransreference
-midataitemid    mitransrefname           mitransrefid
-111210          Initial Public Offering   26
-111211          Secondary Offering        27
-
-Semantic Match: "valuation" matches "Pre-Money Valuation", "Post-Money Valuation", "Enterprise Value", "IPO" matches "Initial Public Offering"
-Constraint: midatatable.midataitemid IN (1070, 1071, 1072) , mitransreference.mitransrefid = 26
-
-Example 6: Plural/Related Term Matching
-Question: What expenses were disclosed in merger transactions?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Legal Expenses           2055
-Underwriting Fees        2050
-Transaction Costs        2060
-Advisory Fees            2065
-
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111220          Merger               30
-111221          Acquisition          31
-
-Semantic Match: "expenses" relates to "Legal Expenses", "Underwriting Fees", "Transaction Costs", "Advisory Fees", "merger" matches "Merger"
-Constraint: midatatable.midataitemid IN (2055, 2050, 2060, 2065) , mitransreference.mitransrefid = 30
-
-Example 7: Abbreviation Matching
-Question: What M&A deal information includes debt financing details?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Debt Amount              3010
-Interest Rate            3011
-Loan Terms              3012
-
-Table: mitransreference
-midataitemid    mitransrefname           mitransrefid
-111230          Merger and Acquisition    32
-111231          Leveraged Buyout         33
-
-Semantic Match: "M&A" matches "Merger and Acquisition", "debt financing" relates to "Debt Amount", "Interest Rate", "Loan Terms"
-Constraint: midatatable.midataitemid IN (3010, 3011, 3012) , mitransreference.mitransrefid = 32
-
-Example 8: No Match Found
-Question: What weather data is available for manufacturing companies?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Revenue Amount           4010
-Employee Count           4011
-
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111240          Series C             40
-111241          Bridge Round         41
-
-Semantic Match: No semantic matches found for "weather data" in financial data context
-Constraint: 
-
-Example 9: Too Broad Question
-Question: What information is available about companies?
-Retrieved Data:
-Table: midatatable
-midataitemname           midataitemid
-Revenue Amount           4010
-Employee Count           4011
-Market Cap               4012
-
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111240          Series C             40
-111241          IPO                  41
-
-Semantic Match: Question too general - "information about companies" could match all available data items
-Constraint: 
-
-Example 10: Reference Category Only Match
-Question: What data is available for bridge financing rounds?
-Retrieved Data:
-Table: mitransreference
-midataitemid    mitransrefname       mitransrefid
-111250          Bridge Financing      50
-111251          Convertible Bridge    51
-111252          Series A             52
-
-Semantic Match: "bridge financing" matches "Bridge Financing" and "Convertible Bridge"
-Constraint: mitransreference.mitransrefid IN (50, 51)
-
-Your task:
-Question: {question}
-Query: {query}
-Retrieved Data:
-{retrieved_data}
-Constraint: """
+---
+*Current Date: {today's_date}*"""
